@@ -1,5 +1,7 @@
 package com.sb.vpnapplication.dns;
 
+import android.util.Log;
+
 import java.nio.ByteBuffer;
 import static com.sb.vpnapplication.dns.LoggerFormatter.format;
 
@@ -186,6 +188,9 @@ public class TunDNSResolver implements Runnable {
                     java.net.InetAddress src = getSourceIP(bb);
                     java.net.InetAddress dst = getDestinationIP(bb);
 
+                    Log.d("cvghnvbhjgjhgj","dst="+dst.getHostAddress());
+                    Log.d("cvghnvbhjgjhgj","src="+src.getHostAddress());
+
                     // check if netflix streaming ip and redirect to our proxy server
 
                     if (tunnelHandler.sendToTunnel(dst)) {
@@ -236,16 +241,22 @@ public class TunDNSResolver implements Runnable {
 
                     bb.position(IP_HEADER_LENGTH);
                     // log.log(java.util.logging.Level.FINE, "{0}",  format("Protocol=", proto));
+                    Log.d("cvghnvbhjgjhgj","here");
                     switch (proto) {
                         case ICMP:
+                            Log.d("cvghnvbhjgjhgj","icmp");
                             if (!icmpHandler.handlePacket(protocolIndex, bb, src, dst, replySender)) {
                                 defaultHandler.handlePacket(protocolIndex, bb, src, dst, rawSender);
                             }
                             break;
                         case UDP:
+                            Log.d("cvghnvbhjgjhgj","udp");
                             if (!udpHandler.handlePacket(protocolIndex, bb, src, dst, replySender)) {
                                 defaultHandler.handlePacket(protocolIndex, bb, src, dst, rawSender);
                             }
+                            break;
+                        case TCP:
+                            Log.d("cvghnvbhjgjhgj","TCP");
                             break;
                         default:
                             if (!defaultHandler.handlePacket(protocolIndex, bb, src, dst, rawSender)) {

@@ -6,6 +6,7 @@ import androidx.annotation.NonNull;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.FileChannel;
@@ -360,7 +361,7 @@ public class TunnelHandler {
     }
 
     public interface OnTunnelConnection {
-        void onInit();
+        void onInit() throws UnknownHostException;
 
         void onConnect(String localAddress);
 
