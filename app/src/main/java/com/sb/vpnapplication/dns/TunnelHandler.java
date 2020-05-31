@@ -3,6 +3,9 @@ import android.os.AsyncTask;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
+
+import com.sb.vpnapplication.logger.LoggerHelper;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -11,11 +14,10 @@ import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.util.Random;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import static com.sb.vpnapplication.dns.LoggerFormatter.format;
+import static com.sb.vpnapplication.logger.LoggerFormatter.format;
 
 public class TunnelHandler {
     private static Logger log = LoggerHelper.getLogger(TunnelHandler.class);
@@ -105,6 +107,8 @@ public class TunnelHandler {
 
             tunnelServerPort = 54076;
             tunnelServerAddress ="166.70.53.214";
+//            tunnelServerPort = 54075;
+//            tunnelServerAddress ="138.197.67.177";
 
             state = ConnectionState.NO_CONNECTED;
             if (onConnectionStateUpdate != null) {
@@ -218,6 +222,7 @@ public class TunnelHandler {
                     bb.limit(length);
                     this.mTunnel.write(bb);
                     lastTunnelEvent = System.currentTimeMillis()/1000;
+                    Log.d("zahid"," here");
                 }
             } catch (IOException e) {
                 e.printStackTrace();

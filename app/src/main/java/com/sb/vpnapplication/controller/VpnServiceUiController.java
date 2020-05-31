@@ -8,6 +8,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.os.IBinder;
+import android.util.Log;
 
 import com.sb.vpnapplication.services.PHVpnService;
 
@@ -115,8 +116,6 @@ public class VpnServiceUiController {
      */
     public void stop() {
         // protect against double stop
-        if ( getStatus() == PHVpnService.ServiceStatus.STOPPED )
-            return;
         _serviceInstance.stop();
     }
 

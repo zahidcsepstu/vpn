@@ -20,14 +20,13 @@ import androidx.core.app.NotificationCompat;
 
 import com.sb.vpnapplication.MainActivity;
 import com.sb.vpnapplication.dns.InetAddressWithMask;
-import com.sb.vpnapplication.dns.LoggerHelper;
+import com.sb.vpnapplication.logger.LoggerHelper;
 import com.sb.vpnapplication.dns.SocketProtector;
 import com.sb.vpnapplication.dns.TunDNSResolver;
 import com.sb.vpnapplication.dns.TunnelHandler;
 
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.logging.Logger;
 

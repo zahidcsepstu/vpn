@@ -1,4 +1,4 @@
-package com.sb.vpnapplication.dns;
+package com.sb.vpnapplication.logger;
 
 import java.nio.charset.Charset;
 

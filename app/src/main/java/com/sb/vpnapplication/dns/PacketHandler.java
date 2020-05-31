@@ -1,5 +1,7 @@
 package com.sb.vpnapplication.dns;
 
+import com.sb.vpnapplication.logger.LoggerHelper;
+
 public abstract class PacketHandler {
     final java.util.logging.Logger log = LoggerHelper.getLogger(getClass());
 

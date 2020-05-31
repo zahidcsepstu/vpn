@@ -1,4 +1,4 @@
-package com.sb.vpnapplication.dns;
+package com.sb.vpnapplication.logger;
 
 public class LoggerHelper {
     private static final java.util.HashMap<java.util.logging.Level, java.lang.reflect.Method> methods = getAndroidLog();
