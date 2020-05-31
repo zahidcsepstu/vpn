@@ -48,13 +48,7 @@ public class   MainActivity extends FragmentActivity{
 
        _vpnServiceUiController = new VpnServiceUiController( this);
 
-
-
-
         vpnController = new VpnController(this, _vpnServiceUiController);
-
-
-
 
         button.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -70,59 +64,20 @@ public class   MainActivity extends FragmentActivity{
 
     }
 
-//
-//
-//
-//    public void refresh(){
-//        if(_configurator != null) {
-//            getStatus();
-//            getTrialDaysRemaining();
-//            invalidateUi();
-//        }
-//        checkVpnStatus();
-//
-//    }
-//
-//
-//
-//
+
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         _vpnServiceUiController.onActivityResult(requestCode, resultCode, data);
     }
-//
-//
+
     @Override
     protected void onStart() {
         super.onStart();
         Log.d("debug",">> onStart " + this);
         _vpnServiceUiController.onStart();
-
-       // Amplitude.getInstance().logEvent("fire-launch");
     }
-//
-//    public void track(String eventName) {
-//        Amplitude.getInstance().logEvent(eventName);
-//    }
-//
-//    public void track(String eventName, String propertyName, Map<String, String> properties) {
-//        if(properties.size() > 0){
-//            try {
-//                JSONArray eventArray = new JSONArray();
-//                for(String key: properties.keySet()){
-//                    JSONObject event = new JSONObject();
-//                    event.put(key, properties.get(key));
-//                    eventArray.put(event);
-//                }
-//                JSONObject eventProperties = new JSONObject();
-//                eventProperties.put(propertyName, eventArray);
-//                Amplitude.getInstance().logEvent(eventName, eventProperties);
-//            } catch (JSONException e) {
-//                e.printStackTrace();
-//            }
-//        }
-//    }
+
 
 
 }

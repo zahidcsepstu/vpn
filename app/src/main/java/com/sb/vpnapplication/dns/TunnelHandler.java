@@ -1,8 +1,8 @@
 package com.sb.vpnapplication.dns;
-
 import android.os.AsyncTask;
-import androidx.annotation.NonNull;
+import android.util.Log;
 
+import androidx.annotation.NonNull;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -11,7 +11,6 @@ import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Random;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -22,15 +21,13 @@ public class TunnelHandler {
     private static Logger log = LoggerHelper.getLogger(TunnelHandler.class);
     private static final long TUNNEL_INACTIVE_TIMEOUT_SECOND = 300;
     private static final long TUNNEL_TRAFFIC_MONITOR_INTERVAL_SECOND = 30;
-    private static final int TUNNEL_SERVER_PORT = 54076;
     private static boolean closed = false;
 
     // holds the value for connection state with tunnel server
     public enum ConnectionState{
         NO_CONNECTED,
         CONNECTING,
-        CONNECTED,
-        DISABLED,
+        CONNECTED
     }
     private static ConnectionState state = ConnectionState.NO_CONNECTED;
 
@@ -104,49 +101,46 @@ public class TunnelHandler {
      */
     public void initConnection(){
         try {
+            Log.d("zahid","TunnelHandler InitConnection");
 
+            tunnelServerPort = 54076;
+            tunnelServerAddress ="166.70.53.214";
 
+            state = ConnectionState.NO_CONNECTED;
+            if (onConnectionStateUpdate != null) {
+                onConnectionStateUpdate.onUpdate(state, (tunnelServerAddress + ":" + tunnelServerPort));
+            }
+            SocketAddress server = new InetSocketAddress(tunnelServerAddress, tunnelServerPort);
 
-                Random rand = new Random();
-                tunnelServerPort = 54085;
-                tunnelServerAddress ="138.197.67.177";
+            mTunnel = DatagramChannel.open();
 
+            // Protect this socket, so package send by it will not be feedback to the vpn service.
+            if (!this.socketProtector.protect(mTunnel.socket())) {
+                this.tunnelConnection.onFail("Cannot protect the tunnel");
+                throw new IllegalStateException("Cannot protect the tunnel");
+            }
 
-                state = ConnectionState.NO_CONNECTED;
-                if (onConnectionStateUpdate != null) {
-                    onConnectionStateUpdate.onUpdate(state, (tunnelServerAddress + ":" + tunnelServerPort));
-                }
+            log.info("SLVA: connecting to tunnel server [" + tunnelServerAddress + ":" + tunnelServerPort + "]");
+            // Connect to the server.clio
+            mTunnel.connect(server);
 
-                SocketAddress server = new InetSocketAddress(tunnelServerAddress, tunnelServerPort);
+            if (tunnelConnection != null) {
+                tunnelConnection.onInit();
+            }
 
-                mTunnel = DatagramChannel.open();
+            tunnelTrafficMonitorThread = new Thread(
+                    new TunnelTrafficMonitorRunnable(this.tunnelConnection),
+                    "tunnel-read");
+            tunnelTrafficMonitorThread.setPriority(Thread.NORM_PRIORITY);
+            tunnelTrafficMonitorThread.start();
+            log.info("SLVA: Tunnel Traffic Monitor Thread Started");
 
-                // Protect this socket, so package send by it will not be feedback to the vpn service.
-                if (!this.socketProtector.protect(mTunnel.socket())) {
-                    this.tunnelConnection.onFail("Cannot protect the tunnel");
-                    throw new IllegalStateException("Cannot protect the tunnel");
-                }
+            tunnelReadThread = new Thread(new TunnelReadRunnable(this.mTunnel, 2000, this.tunnelConnection),
+                    "tunnel-read");
+            tunnelReadThread.setPriority(Thread.MAX_PRIORITY);
+            tunnelReadThread.start();
+            log.info("SLVA: Tunnel Read Thread Started");
 
-                log.info("SLVA: connecting to tunnel server [" + tunnelServerAddress + ":" + tunnelServerPort + "]");
-                // Connect to the server.clio
-                mTunnel.connect(server);
-
-                if (tunnelConnection != null) {
-                    tunnelConnection.onInit();
-                }
-
-                tunnelTrafficMonitorThread = new Thread(
-                        new TunnelTrafficMonitorRunnable(this.tunnelConnection),
-                        "tunnel-read");
-                tunnelTrafficMonitorThread.setPriority(Thread.NORM_PRIORITY);
-                tunnelTrafficMonitorThread.start();
-                log.info("SLVA: Tunnel Traffic Monitor Thread Started");
-
-                tunnelReadThread = new Thread(new TunnelReadRunnable(this.mTunnel, 2000, this.tunnelConnection),
-                        "tunnel-read");
-                tunnelReadThread.setPriority(Thread.MAX_PRIORITY);
-                tunnelReadThread.start();
-                log.info("SLVA: Tunnel Read Thread Started");
 
         } catch (IOException e) {
             e.printStackTrace();
@@ -162,6 +156,7 @@ public class TunnelHandler {
      * Start the tunnel connection
      */
     public void startConnection() {
+        Log.d("zahid","TunnelHandler startConnection");
         state = ConnectionState.CONNECTING;
         if(onConnectionStateUpdate != null){
             onConnectionStateUpdate.onUpdate(state, (tunnelServerAddress+":"+tunnelServerPort));
@@ -190,6 +185,7 @@ public class TunnelHandler {
     }
 
     public void endConnection(){
+        Log.d("zahid","TunnelHandler endConnection");
         if(state == ConnectionState.CONNECTED) {
             state = ConnectionState.NO_CONNECTED;
             if(onConnectionStateUpdate != null){
@@ -214,6 +210,7 @@ public class TunnelHandler {
     }
 
     void handleTunnelPacket(ByteBuffer bb, int length) {
+        Log.d("zahid","TunnelHandler handleTunnelPacket");
         if(state == ConnectionState.CONNECTED){
             try {
                 if (length > 0 && this.mTunnel != null) {
@@ -264,8 +261,7 @@ public class TunnelHandler {
         private int mtu;
         private OnTunnelConnection cs;
 
-        TunnelReadRunnable(@NonNull DatagramChannel tunnel,
-                           int mtu, OnTunnelConnection cs) {
+        TunnelReadRunnable(@NonNull DatagramChannel tunnel, int mtu, OnTunnelConnection cs) {
             this.tunnel = tunnel;
             this.mtu = mtu;
             this.cs = cs;
@@ -283,10 +279,12 @@ public class TunnelHandler {
                         bufferFromNetwork.flip();
                         bufferFromNetwork.limit(len);
                         if (state == ConnectionState.CONNECTED && mVpnOut != null) {
+                            Log.d("zahid","1");
                             // when tunnel is connected and interface is created,
                             // foreword all packet to vpn interface
                             mVpnOut.write(bufferFromNetwork);
                         } else if (bufferFromNetwork.array()[0] == _packet_marker) {
+                            Log.d("zahid","2");
                             // confirmation of successful connection,
                             // start vpn connection
                             byte[] address = new byte[len - 1];
@@ -300,6 +298,7 @@ public class TunnelHandler {
                             log.info("SLVA: Successfully connected to tunnel server");
                             cs.onConnect(vpnAddress + "/31");
                         } else {
+                            Log.d("zahid","3");
                             // auth token packet received,
                             // send it back to server
                             this.tunnel.write(bufferFromNetwork);
@@ -310,8 +309,6 @@ public class TunnelHandler {
                     bufferFromNetwork.clear();
                 }
 
-            } catch (IOException e) {
-                log.log(Level.SEVERE, e.toString(), e);
             } catch (Exception e) {
                 log.log(Level.SEVERE, e.toString(), e);
             }

@@ -72,24 +72,6 @@ public class VpnServiceUiController {
     public VpnServiceUiController(Activity activity) {
         this._activity = activity;
         this._context = _activity;
-
-
-        // self observe to send mixpanel events
-//        //
-//        _observable.addObserver(
-//                (observable,  data) -> {
-//                    switch (_serviceInstance.getStatus()) {
-//                        case STARTED:
-//                           // Amplitude.getInstance().logEvent("fire-vpn-start-success");
-//                            break;
-//                        case STOPPED:
-//                           // Amplitude.getInstance().logEvent("fire-vpn-stop-success");
-//                            break;
-//                        case FAILED:
-//                           // Amplitude.getInstance().logEvent("fire-vpn-start-failure");
-//                            break;
-//                    }
-//                });
     }
 
     /**
@@ -115,8 +97,6 @@ public class VpnServiceUiController {
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (resultCode == Activity.RESULT_OK) {
             startTheService();
-        }
-        else {
         }
     }
 

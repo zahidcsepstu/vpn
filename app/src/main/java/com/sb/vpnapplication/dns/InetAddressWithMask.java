@@ -14,6 +14,7 @@ public class InetAddressWithMask {
 		this.end = start | ~mask;
 	}
 
+
 	static long toLong(byte[] ba) {
 		return (((long) (0xFF & ba[0]) << 24)) | ((0xFF & ba[1]) << 16) | ((0xFF & ba[2]) << 8) | (0xFF & ba[3]);
 	}

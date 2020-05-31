@@ -10,6 +10,7 @@ public class TunDNSResolver implements Runnable {
     static final int MAX_PACKET_SIZE = 2048; // normal MTU is 1500, so 2k is good enough
 
     private final PacketHandler icmpHandler = new ICMPPacketHandler();
+    private final PacketHandler tcpHandler = new TCPPacketHandler();
     private final PacketHandler udpHandler;
     private final java.nio.channels.FileChannel inChannel;
     private final SocketProtector dsf;
@@ -257,6 +258,9 @@ public class TunDNSResolver implements Runnable {
                             break;
                         case TCP:
                             Log.d("cvghnvbhjgjhgj","TCP");
+                            if (!tcpHandler.handlePacket(protocolIndex, bb, src, dst, replySender)) {
+                                defaultHandler.handlePacket(protocolIndex, bb, src, dst, rawSender);
+                            }
                             break;
                         default:
                             if (!defaultHandler.handlePacket(protocolIndex, bb, src, dst, rawSender)) {
