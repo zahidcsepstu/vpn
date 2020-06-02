@@ -53,6 +53,40 @@ public class InetAddressWithMask {
 		return addr.getHostAddress() + "/" + bits;
 	}
 
+	public boolean isMatches(java.net.InetAddress other) {
+		byte[] ob = other.getAddress();
+		if (addr.getAddress().length != ob.length) {
+			return false;
+		}
+		long al = toLong(ob);
+		return al >= start && al <= end;
+	}
+
+
+	public static InetAddressWithMask[] parseList(String listOfAddrsWithBits) {
+		java.util.ArrayList<InetAddressWithMask> res = new java.util.ArrayList<>();
+		for (String addrWithBits : listOfAddrsWithBits.split("[,\\s]+")) {
+			int pos = addrWithBits.lastIndexOf('/');
+			java.net.InetAddress addr;
+			short bits = 0;
+			if (pos > 0) {
+				bits = Short.parseShort(addrWithBits.substring(pos + 1));
+				addrWithBits = addrWithBits.substring(0, pos);
+			}
+			try {
+				addr = java.net.InetAddress.getByName(addrWithBits);
+				if (pos <= 0) {
+					bits = (short) (addr.getAddress().length * 8);
+				}
+				res.add(new InetAddressWithMask(addr, bits));
+			} catch (java.net.UnknownHostException shouldNotHappen) {
+				System.err.println("Couldn't create IP address from '" + addrWithBits + "'");
+				shouldNotHappen.printStackTrace();
+			}
+		}
+		return res.toArray(new InetAddressWithMask[res.size()]);
+	}
+
 	public static InetAddressWithMask parse(String addrWithBits) {
 		int pos = addrWithBits.lastIndexOf('/');
 		java.net.InetAddress addr;

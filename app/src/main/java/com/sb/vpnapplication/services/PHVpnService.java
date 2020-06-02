@@ -175,10 +175,11 @@ public class PHVpnService extends VpnService implements SocketProtector {
                     _builder.setSession("PHVPNService");
                     _builder.addAddress(addr.getAddress(), addr.getBits());
 
-                    int mtu = 20048;
+                    int mtu = 1400;
                     _builder.setMtu(mtu);
                     _builder.addDnsServer("8.8.8.8");
                     _builder.addDnsServer("8.8.4.4");
+                    _builder.addAllowedApplication("com.android.chrome");
                     _builder.addRoute("0.0.0.0",0);
                     mInterface = _builder.establish();
 
@@ -262,7 +263,7 @@ public class PHVpnService extends VpnService implements SocketProtector {
     private class TunnelConnectionEvents implements TunnelHandler.OnTunnelConnection {
 
         @Override
-        public void onInit() throws UnknownHostException {
+        public void onInit() {
             Log.d("zahid","tunnel on init");
             log.info("SLVA: Start default VPN connection");
             startVPN(InetAddressWithMask.parse("1.1.1.0/31"));
@@ -277,7 +278,7 @@ public class PHVpnService extends VpnService implements SocketProtector {
                 mThread.interrupt();
                 mThread = null;
             }
-            Log.d("vpn address",vpnAddress);
+           // Log.d("vpn address",vpnAddress);
             startVPN(InetAddressWithMask.parse(vpnAddress));
 
         }
@@ -290,7 +291,7 @@ public class PHVpnService extends VpnService implements SocketProtector {
 
         @Override
         public void onFail(String message) {
-            Log.d("zahid","tunnel on failed");
+            Log.d("zahid","tunnel on failed "+message);
             log.warning(message);
             // TUN  connection state should not influence the overall service status. The TUN connection might fail while the DNS resolver works for other services
             //setServiceStatus(ServiceStatus.FAILED);

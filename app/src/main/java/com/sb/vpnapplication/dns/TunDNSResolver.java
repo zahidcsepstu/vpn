@@ -12,8 +12,13 @@ public class TunDNSResolver implements Runnable {
     private static final java.util.logging.Logger log = LoggerHelper.getLogger(TunDNSResolver.class);
     static final int MAX_PACKET_SIZE = 2048; // normal MTU is 1500, so 2k is good enough
 
+    private final PacketHandler icmpHandler = new ICMPPacketHandler();
+    private final PacketHandler tcpHandler = new TCPPacketHandler();
+    private final PacketHandler udpHandler;
     private final java.nio.channels.FileChannel inChannel;
     private final SocketProtector dsf;
+    private final IPv4PacketSender replySender;
+    private final RawPacketSender rawSender;
     private PacketHandler vpnHandler;
     private boolean closing = false;
     private boolean closed = false;
@@ -27,23 +32,46 @@ public class TunDNSResolver implements Runnable {
     private static final int IP_HEADER_LENGTH = 20;
     private Thread readerThread;
 
-    private static  TunnelHandler tunnelHandler;
+    private static TunnelHandler tunnelHandler;
     private static TunnelHandler.ConnectionState tunnelState = TunnelHandler.ConnectionState.NO_CONNECTED;
 
     public TunDNSResolver(SocketProtector dsf, java.io.FileInputStream in, java.io.FileOutputStream out, TunnelHandler th) {
+        TCPConnectionHandler.setSocketProtector(dsf);
+        this.udpHandler = new UDPPackeHandler(dsf);
         this.dsf = dsf;
         this.inChannel = in.getChannel();
+        java.nio.channels.FileChannel outChannel = out.getChannel();
+        this.replySender = new IPv4PacketSender(outChannel);
+        this.rawSender = new RawPacketSender(outChannel);
         tunnelHandler = th;
         tunnelHandler.setOnConnectionStateUpdate(new TunnelConnectionStateChangeListener());
         tunnelState = TunnelHandler.getState();
     }
 
-
+    public synchronized TunDNSResolver start() {
+        if (readerThread != null && readerThread.isAlive()) {
+            log.warning("Thread already running, stop it first if you want to restart");
+            return this;
+        }
+        closed = closing = false;
+        Thread t = new Thread(this, "TunDNSResolver");
+        t.setDaemon(true);
+        t.start();
+        readerThread = t;
+        return this;
+    }
 
     private void terminateHandlers() {
+        if (udpHandler != null) {
+            udpHandler.terminate();
+        }
+        if (icmpHandler != null) {
+            icmpHandler.terminate();
+        }
         if (vpnHandler != null) {
             vpnHandler.terminate();
         }
+        tcpHandler.terminate();
     }
 
     public void stop() {
@@ -101,7 +129,6 @@ public class TunDNSResolver implements Runnable {
         }
     }
 
-
     public void run() {
         try {
             byte[] ba = new byte[MAX_PACKET_SIZE];
@@ -109,17 +136,15 @@ public class TunDNSResolver implements Runnable {
             int size = 0;
             int packetLength = 0;
             bb.limit(ba.length);
-//            PacketHandler defaultHandler = vpnHandler = getVpnHandler(dsf);
-//            if (defaultHandler == null) {
-//                defaultHandler = new DefaultPacketHandler();
-//            }
-
+            PacketHandler defaultHandler = new DefaultPacketHandler();
             log.info(RemoteLogger.log("TUN handler is running"));
             log.info("SLVA: Tunnel handler is running");
             while (true) {
+
                 try {
                     int i = inChannel.read(bb);
                     if (i < 0) {
+                        Log.d("zahid","in while read byte<0 break");
                         break;
                     }
 
@@ -153,20 +178,22 @@ public class TunDNSResolver implements Runnable {
                     bb.limit(packetLength);
                     java.net.InetAddress src = getSourceIP(bb);
                     java.net.InetAddress dst = getDestinationIP(bb);
-
-                    Log.d("cvghnvbhjgjhgj","dst="+dst.getHostAddress());
-                    Log.d("cvghnvbhjgjhgj","src="+src.getHostAddress());
+                    Log.d("zahid","dst="+dst.getHostAddress());
+                    Log.d("zahid","src="+src.getHostAddress());
 
                     // check if netflix streaming ip and redirect to our proxy server
 
                     if (tunnelHandler.sendToTunnel(dst)) {
+                        Log.d("zahid","send to tunnel true  " + tunnelState);
                         if(tunnelState == TunnelHandler.ConnectionState.CONNECTED) {
+                            Log.d("zahid","send to tunnel && connected");
                             tunnelHandler.handleTunnelPacket(bb, packetLength);
                             bb.clear();
                             size = packetLength = 0;
-                            Log.d("zahid","continue");
+                            Log.d("zahid","data send to tunnel");
                             continue;
                         }else if(tunnelState == TunnelHandler.ConnectionState.NO_CONNECTED){
+                            Log.d("zahid","not connected. starting connection");
                             tunnelHandler.startConnection();
                         }
                     }
@@ -183,6 +210,7 @@ public class TunDNSResolver implements Runnable {
                     if (alwaysIgnore.contains(dst)) {
                         bb.clear();
                         size = packetLength = 0;
+                        Log.d("zahid","always ignore. continue");
                         continue;
                     }
 
@@ -202,14 +230,44 @@ public class TunDNSResolver implements Runnable {
                         size = packetLength = 0;
                         bb.position(0);
                         bb.limit(ba.length);
+                        Log.d("zahid","checksum error continue.");
                         continue;
                     }
                     bb.putShort(10, (short) checksum); // restore checksum for VPN handler
 
                     bb.position(IP_HEADER_LENGTH);
-                    // log.log(java.util.logging.Level.FINE, "{0}",  format("Protocol=", proto));
-                    Log.d("cvghnvbhjgjhgj","here");
+                    log.log(java.util.logging.Level.FINE, "{0}",  format("Protocol=", proto));
+                    switch (proto) {
 
+                        case ICMP:
+                            Log.d("zahid","icmp handler");
+                            if (!icmpHandler.handlePacket(protocolIndex, bb, src, dst, replySender)) {
+                                Log.d("zahid","default handle icmp.");
+                                defaultHandler.handlePacket(protocolIndex, bb, src, dst, rawSender);
+                            }
+                            break;
+                        case UDP:
+                            Log.d("zahid","udp handler");
+                            if (!udpHandler.handlePacket(protocolIndex, bb, src, dst, replySender)) {
+                                Log.d("zahid","default handle udp.");
+                                defaultHandler.handlePacket(protocolIndex, bb, src, dst, rawSender);
+                            }
+                            break;
+                        case TCP:
+                            Log.d("zahid","tcp handler");
+                            if (!tcpHandler.handlePacket(protocolIndex, bb, src, dst, replySender)) {
+                                Log.d("zahid","default handle tcp.");
+                                defaultHandler.handlePacket(protocolIndex, bb, src, dst, rawSender);
+                            }
+                            break;
+                        default:
+                            Log.d("zahid","default handler");
+                            if (!defaultHandler.handlePacket(protocolIndex, bb, src, dst, rawSender)) {
+                                Log.d("zahid","default handler not works.");
+                                log.warning("Default handler refused " + proto + " packet");
+                            }
+                            break;
+                    }
 
                     if (size > 0) { // just in case there was more than packet in pipe
                         if (size > ba.length) { // corrupted or incomplete packet? clear buffer and continue
@@ -285,5 +343,4 @@ public class TunDNSResolver implements Runnable {
     private static int getLength(ByteBuffer bb) {
         return 0xFFFF & bb.getShort(2);
     }
-
 }

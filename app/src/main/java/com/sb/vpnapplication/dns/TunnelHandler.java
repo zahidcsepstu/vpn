@@ -9,7 +9,7 @@ import com.sb.vpnapplication.logger.LoggerHelper;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
-import java.net.UnknownHostException;
+
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.FileChannel;
@@ -23,13 +23,15 @@ public class TunnelHandler {
     private static Logger log = LoggerHelper.getLogger(TunnelHandler.class);
     private static final long TUNNEL_INACTIVE_TIMEOUT_SECOND = 300;
     private static final long TUNNEL_TRAFFIC_MONITOR_INTERVAL_SECOND = 30;
+    private static final int TUNNEL_SERVER_PORT = 54076;
     private static boolean closed = false;
 
     // holds the value for connection state with tunnel server
     public enum ConnectionState{
         NO_CONNECTED,
         CONNECTING,
-        CONNECTED
+        CONNECTED,
+        DISABLED,
     }
     private static ConnectionState state = ConnectionState.NO_CONNECTED;
 
@@ -39,6 +41,7 @@ public class TunnelHandler {
 
     private DatagramChannel mTunnel;
     private static FileChannel mVpnOut = null;
+
 
 
     private Thread tunnelReadThread;
@@ -103,18 +106,22 @@ public class TunnelHandler {
      */
     public void initConnection(){
         try {
-            Log.d("zahid","TunnelHandler InitConnection");
 
-            tunnelServerPort = 54076;
-            tunnelServerAddress ="166.70.53.214";
-//            tunnelServerPort = 54075;
-//            tunnelServerAddress ="138.197.67.177";
+
+
+
+            tunnelServerAddress="166.70.53.214";
+            tunnelServerPort=54076;
+
 
             state = ConnectionState.NO_CONNECTED;
             if (onConnectionStateUpdate != null) {
                 onConnectionStateUpdate.onUpdate(state, (tunnelServerAddress + ":" + tunnelServerPort));
+                Log.d("addresscheck","tunHandler not connected tunserverAddress+port"+tunnelServerAddress+tunnelServerPort);
             }
+
             SocketAddress server = new InetSocketAddress(tunnelServerAddress, tunnelServerPort);
+            Log.d("addresscheck","tunHandler tunserverAddress+port"+tunnelServerAddress+tunnelServerPort);
 
             mTunnel = DatagramChannel.open();
 
@@ -139,13 +146,12 @@ public class TunnelHandler {
             tunnelTrafficMonitorThread.start();
             log.info("SLVA: Tunnel Traffic Monitor Thread Started");
 
-            tunnelReadThread = new Thread(new TunnelReadRunnable(this.mTunnel, 2000, this.tunnelConnection),
+            tunnelReadThread = new Thread(
+                    new TunnelReadRunnable(this.mTunnel, 1400, this.tunnelConnection),
                     "tunnel-read");
             tunnelReadThread.setPriority(Thread.MAX_PRIORITY);
             tunnelReadThread.start();
             log.info("SLVA: Tunnel Read Thread Started");
-
-
         } catch (IOException e) {
             e.printStackTrace();
             // and suggest that they stop the service, since we can't do it ourselves
@@ -160,12 +166,11 @@ public class TunnelHandler {
      * Start the tunnel connection
      */
     public void startConnection() {
-        Log.d("zahid","TunnelHandler startConnection");
         state = ConnectionState.CONNECTING;
         if(onConnectionStateUpdate != null){
             onConnectionStateUpdate.onUpdate(state, (tunnelServerAddress+":"+tunnelServerPort));
+            Log.d("addresscheck","tunHandler connecting tunserverAddress+port"+tunnelServerAddress+tunnelServerPort);
         }
-
         Thread initiateThread = new Thread(new Runnable() {
             @Override
             public void run() {
@@ -189,7 +194,6 @@ public class TunnelHandler {
     }
 
     public void endConnection(){
-        Log.d("zahid","TunnelHandler endConnection");
         if(state == ConnectionState.CONNECTED) {
             state = ConnectionState.NO_CONNECTED;
             if(onConnectionStateUpdate != null){
@@ -210,11 +214,17 @@ public class TunnelHandler {
 
     //TODO: handle independent tunnel address
     boolean sendToTunnel(java.net.InetAddress dst){
+        boolean send = true;
+//        for(Subnet subnet: _config.getSubnetTunnelMap().keySet()){
+//            if(subnet.getInfo().isInRange(dst.getHostAddress())){
+//                send = true;
+//                break;
+//            }
+//        }
         return true;
     }
 
     void handleTunnelPacket(ByteBuffer bb, int length) {
-        Log.d("zahid","TunnelHandler handleTunnelPacket");
         if(state == ConnectionState.CONNECTED){
             try {
                 if (length > 0 && this.mTunnel != null) {
@@ -222,7 +232,6 @@ public class TunnelHandler {
                     bb.limit(length);
                     this.mTunnel.write(bb);
                     lastTunnelEvent = System.currentTimeMillis()/1000;
-                    Log.d("zahid"," here");
                 }
             } catch (IOException e) {
                 e.printStackTrace();
@@ -266,8 +275,10 @@ public class TunnelHandler {
         private int mtu;
         private OnTunnelConnection cs;
 
-        TunnelReadRunnable(@NonNull DatagramChannel tunnel, int mtu, OnTunnelConnection cs) {
+        TunnelReadRunnable(@NonNull DatagramChannel tunnel,
+                           int mtu, OnTunnelConnection cs) {
             this.tunnel = tunnel;
+            Log.d("zahid","Tunnel read mtu"+mtu);
             this.mtu = mtu;
             this.cs = cs;
         }
@@ -284,7 +295,7 @@ public class TunnelHandler {
                         bufferFromNetwork.flip();
                         bufferFromNetwork.limit(len);
                         if (state == ConnectionState.CONNECTED && mVpnOut != null) {
-                            Log.d("zahid","1");
+                            Log.d("zahid","got response from server write to client");
                             // when tunnel is connected and interface is created,
                             // foreword all packet to vpn interface
                             mVpnOut.write(bufferFromNetwork);
@@ -299,8 +310,10 @@ public class TunnelHandler {
                             state = ConnectionState.CONNECTED;
                             if(onConnectionStateUpdate != null){
                                 onConnectionStateUpdate.onUpdate(state, (tunnelServerAddress+":"+tunnelServerPort));
+                                Log.d("addresscheck","tunHandler connected tunserverAddress+port"+tunnelServerAddress+tunnelServerPort);
                             }
                             log.info("SLVA: Successfully connected to tunnel server");
+                            Log.d("addresscheck","tunHandler vpn address"+vpnAddress);
                             cs.onConnect(vpnAddress + "/31");
                         } else {
                             Log.d("zahid","3");
@@ -314,6 +327,8 @@ public class TunnelHandler {
                     bufferFromNetwork.clear();
                 }
 
+            } catch (IOException e) {
+                log.log(Level.SEVERE, e.toString(), e);
             } catch (Exception e) {
                 log.log(Level.SEVERE, e.toString(), e);
             }
@@ -363,7 +378,7 @@ public class TunnelHandler {
     }
 
     public interface OnTunnelConnection {
-        void onInit() throws UnknownHostException;
+        void onInit();
 
         void onConnect(String localAddress);
 
