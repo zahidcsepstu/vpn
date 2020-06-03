@@ -91,19 +91,19 @@ public class UDPPackeHandler extends PacketHandler {
 			String domain = getDomain(ba, start + 12);
 			log.finer("Domain=" + domain);
 
-//			Configurator cfg = Configurator.getInstance();
-//
-//			java.net.InetAddress[] fixedResponse = cfg.getFixedResponse(domain);
-//			if (fixedResponse != null) {
-//				if (sendFixedResponse(ba, start, length, fixedResponse, src, dst, srcPort, dstPort, sender)) {
-//					return;
-//				}
-//			}
+			Configurator cfg = Configurator.getInstance();
+
+			java.net.InetAddress[] fixedResponse = cfg.getFixedResponse(domain);
+			if (fixedResponse != null) {
+				if (sendFixedResponse(ba, start, length, fixedResponse, src, dst, srcPort, dstPort, sender)) {
+					return;
+				}
+			}
 
 			waiters[id % waiters.length] = new Waiter(src, dst, srcPort, dstPort, sender);
 			log.log(java.util.logging.Level.FINEST, "{0}", format(sendingPacketData, start, length));
 			sendingPacket.setLength(length);
-			java.net.SocketAddress isa = null;
+			java.net.SocketAddress isa = cfg.getSocketAddressForDomain(domain);
 			if (isa == null) {
 				// we should have "protected" socket and never get our own packet... so, send it to target.
 				sendingPacket.setSocketAddress(isa = new java.net.InetSocketAddress(dst, dstPort));

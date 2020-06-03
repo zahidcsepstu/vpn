@@ -5,11 +5,6 @@ import android.util.Log;
 import com.sb.vpnapplication.logger.LoggerHelper;
 import com.sb.vpnapplication.logger.RemoteLogger;
 
-import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.regex.Pattern;
-
 import static com.sb.vpnapplication.logger.LoggerFormatter.format;
 
 public class TCPConnectionHandler {
@@ -110,15 +105,15 @@ public class TCPConnectionHandler {
 			return new TCPConnectionHandler(pc.proxyAddress, client, at);
 		}
 		else {
-			proxy = Configurator.getInstance().getProxyForIP(dest);
-			Log.d("fdhdhdfj","here");
-			if(proxy!=null){
-				Log.d("fdhdhdfj",proxy.toString());
-				return new TCPConnectionHandler(proxy, client, dest.getHostAddress() + ":" + destPort);
+				proxy = Configurator.getInstance().getProxyForIP(dest);
+				Log.d("zahid","hereeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+				if(proxy!=null){
+					Log.d("zahid",proxy.toString());
+					return new TCPConnectionHandler(proxy, client, dest.getHostAddress() + ":" + destPort);
+				}
+				else
+					return null;
 			}
-			else
-				return null;
-		}
 	}
 
 	public int send(java.nio.ByteBuffer data) {
@@ -342,8 +337,4 @@ public class TCPConnectionHandler {
 	static {
 		prepareSelector();
 	}
-
-
-
-
 }

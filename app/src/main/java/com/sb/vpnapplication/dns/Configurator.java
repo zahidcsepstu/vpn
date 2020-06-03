@@ -42,6 +42,9 @@ public class Configurator {
 	private Properties loadedProps = null;
 	private boolean terminate = false;
 
+	private java.net.NetworkInterface lastActiveInterface;
+	private java.net.InetAddress lastAddress;
+	private java.net.InetAddress lastRouterAddress;
 	private String countryToSet;
 	private String actualCountry;
 	private String serialNumber;
@@ -65,6 +68,11 @@ public class Configurator {
 
 
 
+	/**
+	 * get ACTUAL country user is located according to NF checker
+	 *
+	 * @return 2 letter country code (GB for United Kingdom)
+	 */
 	public String getLocalCountry() {
 		String s;
 		if (loadedProps != null && (s = loadedProps.getProperty("country_override")) != null) {
@@ -317,6 +325,60 @@ public class Configurator {
 	private int proxyPort = DEFAULT_PROXY_PORT;
 	private InetAddressWithMask[] routes = null;
 
+	public InetAddressWithMask[] getRedirectRanges() {
+
+		String s = getProperty("route");
+		java.util.HashSet<InetAddressWithMask> res = new java.util.HashSet<>();
+		if (s != null) {
+			res.addAll(java.util.Arrays.asList(InetAddressWithMask.parseList(s)));
+		}
+		ArrayList<java.net.InetAddress> dnsServers = getSystemDnsServers();
+		if (dnsServers != null) {
+			for (java.net.InetAddress a : dnsServers) {
+				res.add(new InetAddressWithMask(a));
+			}
+		}
+		res.add(new InetAddressWithMask(getRouterAddress()));
+		s = getProperty("fake_range");
+		if (s != null) {
+			fakeRange = InetAddressWithMask.parse(s);
+		}
+		s = getProperty("proxy_port");
+		if (s == null || "".equals(s = s.trim())) {
+			proxyPort = DEFAULT_PROXY_PORT;
+		} else {
+			proxyPort = Integer.parseInt(s);
+		}
+		res.add(fakeRange);
+		buildIncludeExcludePatterns();
+		if (!proxyRanges.isEmpty()) {
+			res.addAll(proxyRanges.keySet());
+		}
+		routes = res.toArray(new InetAddressWithMask[res.size()]);
+		RemoteLogger.log(format("Routes: ", routes));
+		return routes;
+	}
+
+	private ArrayList<java.net.InetAddress> getSystemDnsServers() {
+		ArrayList<java.net.InetAddress> res = new ArrayList<>();
+		try {
+			Class<?> SystemProperties = Class.forName("android.os.SystemProperties");
+			java.lang.reflect.Method method = SystemProperties.getMethod("get", String.class);
+			for (String name : new String[] { "net.dns1", "net.dns2", "net.dns3", "net.dns4" }) {
+				String value = (String) method.invoke(null, name);
+				if (value != null && !"".equals(value)) {
+					res.add(java.net.InetAddress.getByName(value));
+				}
+			}
+		} catch (ClassNotFoundException ex) {
+			log.warning("couldn't get DNS servers (not android?)");
+		} catch (Exception ex) {
+			log.warning(format("couldn't get DNS servers ", ex).toString());
+		}
+		log.info("System DNS Servers:" + res);
+		return res;
+	}
+
 	private java.net.InetAddress[] dnsServers = null;
 
 	public java.net.InetAddress[] getDNSServers() {
@@ -342,6 +404,28 @@ public class Configurator {
 
 
 	private String[] apps = null;
+
+	public String[] getApps() {
+		if (!installedAppsReported) {
+			installedAppsReported = true;
+			RemoteLogger.log(format("Installed apps: ", installedApps));
+		}
+		if (apps != null) {
+			return apps;
+		}
+		String s = getProperty("apps");
+		if (s == null) {
+			return apps = new String[0];
+		}
+		return apps = s.split("[\\s,]+");
+	}
+
+	private String[] installedApps;
+	private boolean installedAppsReported = false;
+
+	public void setInstalledApps(String[] apps) {
+		this.installedApps = apps;
+	}
 
 
 	private InetAddressWithMask getVPNAddressWithoutWait() {
@@ -574,8 +658,36 @@ public class Configurator {
 		}
 	}
 
+	private java.net.InetAddress getRouterAddress() {
+		try {
+			if (lastActiveInterface == null || lastAddress == null
+					|| (!lastActiveInterface.equals(java.net.NetworkInterface.getByInetAddress(lastAddress)))) {
+				java.net.InetAddress ia = findLocalInetAddress();
+				if (ia == null) {
+					return null;
+				}
+				java.net.NetworkInterface ni = java.net.NetworkInterface.getByInetAddress(ia);
+				if (ni == null) {
+					return null;
+				}
+				lastActiveInterface = ni;
+				lastAddress = ia;
+				lastRouterAddress = null;
+			}
+			if (lastRouterAddress == null) {
+				// just a best guess, I don't know how reliably find actual router without system commands or "special" access
+				byte[] ba = lastAddress.getAddress();
+				ba[3] = 1;
+				lastRouterAddress = java.net.InetAddress.getByAddress(ba);
+			}
+			return lastRouterAddress;
+		} catch (java.net.UnknownHostException | java.net.SocketException ex) {
+			log.log(java.util.logging.Level.WARNING, "{0}", format(ex));
+		}
+		return null;
+	}
 
-	long toLong(byte[] ba) {
+	static long toLong(byte[] ba) {
 		return (((long) (0xFF & ba[0]) << 24)) | ((0xFF & ba[1]) << 16) | ((0xFF & ba[2]) << 8) | (0xFF & ba[3]);
 	}
 
@@ -586,6 +698,118 @@ public class Configurator {
 		res[2] = (byte) (0xFF & (l >>> 8));
 		res[3] = (byte) (0xFF & l);
 		return res;
+	}
+
+	private static java.net.InetAddress lastKnownAddress;
+	private static java.net.NetworkInterface lastKnownAddressInterface;
+	private static long lastKnownAddressExpiryTime;
+	private static final long lastAddressCacheTimeout = 60000; // don't check way too often, it may be expensive
+
+	/**
+	 * Get "default" local address connecting to www.google.com (may take a
+	 * while or fail!)
+	 *
+	 * @return "default" local address or <code>null</code> if not found
+	 */
+	public java.net.InetAddress findLocalInetAddress() {
+		try {
+			long now = System.currentTimeMillis();
+			if (lastKnownAddress != null && lastKnownAddressExpiryTime > now && lastKnownAddressInterface != null
+					&& lastKnownAddressInterface.equals(java.net.NetworkInterface.getByInetAddress(lastKnownAddress))) {
+				return lastKnownAddress;
+			}
+
+			InetAddressWithMask vpnAddr = getVPNAddressWithoutWait();
+			java.net.InetAddress myVpnAddress = vpnAddr == null ? null : vpnAddr.getAddress();
+
+			java.util.Enumeration<java.net.NetworkInterface> en = java.net.NetworkInterface.getNetworkInterfaces();
+			java.net.InetAddress found = null;
+			java.net.NetworkInterface foundInterface = null;
+			net: while (en.hasMoreElements()) {
+				java.net.NetworkInterface ni = en.nextElement();
+				String s = ni.getName();
+				if (s != null && s.startsWith("p2p-wlan0")) { // ignore p2p interfaces, they just make noise
+					continue;
+				}
+				java.util.Enumeration<java.net.InetAddress> aen = ni.getInetAddresses();
+				while (aen.hasMoreElements()) {
+					java.net.InetAddress ia = aen.nextElement();
+					if (ia.isAnyLocalAddress() || ia.isLinkLocalAddress() || ia.isLoopbackAddress()
+							|| ia.isMulticastAddress() || ia.getAddress().length > 4 || ia.equals(myVpnAddress)) {
+						continue;
+					}
+					if (found == null) {
+						found = ia;
+						foundInterface = ni;
+					} else {
+						log.fine("Found more than one InetAddress: " + found.getHostAddress() + " (" + foundInterface
+								+ ") and " + ia.getHostAddress() + " (" + ni + "), will try connection");
+						found = null;
+						break net;
+					}
+				}
+			}
+
+			if (actualCountry == null) {
+				try {
+					actualCountry = NetworkDiagnostic.findCountryCodeFromContent(
+							"http://api-global.netflix.com/apps/applefuji/config?v=2.0&device_type=NFAPPL-03-&application_v=5.1.0&application_name=AppleTV&certification_version=0&routing=redirect",
+							null);
+				} catch (Exception ex) {
+					log.warning(format("Couldn't find local country ", ex).toString());
+				}
+			}
+			if (found == null) {
+				log.fine("Coudldn't find good single address, will try connection");
+			} else {
+				log.fine("Found one good local address: " + found.getHostAddress());
+				lastKnownAddressInterface = foundInterface;
+				lastKnownAddressExpiryTime = now + lastAddressCacheTimeout;
+				return lastKnownAddress = found;
+			}
+			java.net.InetAddress[] addrs = java.net.InetAddress.getAllByName("www.google.com");
+			for (java.net.InetAddress a : addrs) {
+				if (a instanceof java.net.Inet4Address) { // we want only IPv4 addresses (since VPN supports only those?)
+					java.net.Socket so = null;
+					try {
+						so = new java.net.Socket();
+						so.setSoTimeout(CONNECT_TIMEOUT);
+						so.connect(new java.net.InetSocketAddress(a, 80), CONNECT_TIMEOUT);
+						lastKnownAddress = so.getLocalAddress();
+						lastKnownAddressInterface = java.net.NetworkInterface.getByInetAddress(lastKnownAddress);
+						lastKnownAddressExpiryTime = now + lastAddressCacheTimeout;
+						so.close();
+						so = null;
+						break;
+					} catch (java.net.SocketException ignore) {
+					} finally {
+						if (so != null) {
+							try {
+								so.close();
+							} catch (Exception ignore) {
+							}
+						}
+					}
+				}
+			}
+		} catch (Exception ex) {
+			log.log(java.util.logging.Level.WARNING, "{0}", format(ex));
+			if(configListener != null) {
+				configListener.loadedConfigurator(false);
+			}
+		}
+		return lastKnownAddress;
+	}
+
+	private java.net.InetAddress findFirstIPv4Address(java.net.NetworkInterface in) {
+		java.util.Enumeration<java.net.InetAddress> en = in.getInetAddresses();
+		while (en.hasMoreElements()) {
+			java.net.InetAddress addr = en.nextElement();
+			if ((addr instanceof java.net.Inet4Address) && !addr.isLoopbackAddress() && !addr.isMulticastAddress()) {
+				return addr;
+			}
+		}
+		return null;
 	}
 
 	private static String toHexString(byte[] ba) {
@@ -599,8 +823,70 @@ public class Configurator {
 		return sb.toString();
 	}
 
+	private java.net.NetworkInterface findDefaultNetworkInterface() {
+		java.net.InetAddress ia = findLocalInetAddress();
+		if (ia == null) {
+			return null;
+		}
+		try {
+			return java.net.NetworkInterface.getByInetAddress(ia);
+		} catch (java.net.SocketException ex) {
+			log.log(java.util.logging.Level.WARNING, "{0}", format(ex));
+		}
+		return null;
+	}
 
 
+	public String getDeviceId() {
+		if (deviceId != null) {
+			return deviceId;
+		}
+		java.net.NetworkInterface ni = findDefaultNetworkInterface();
+		if (ni != null) {
+			try {
+				return toHexString(ni.getHardwareAddress());
+			} catch (java.net.SocketException ex) {
+				log.log(java.util.logging.Level.WARNING, "{0}", format(ex));
+			}
+		}
+		if (!foundActiveInterface) {
+			try {
+				log.fine("Querying network interfaces");
+				java.util.Enumeration<java.net.NetworkInterface> en = java.net.NetworkInterface.getNetworkInterfaces();
+				java.net.NetworkInterface active = null;
+				java.net.NetworkInterface anyWithMac = null;
+				while (en.hasMoreElements()) {
+					ni = en.nextElement();
+					byte[] ha = ni.getHardwareAddress();
+					if (ha == null || ha.length == 0) {
+						continue;
+					}
+					if (ni.isVirtual() || ni.isLoopback() || !ni.isUp() || ni.isPointToPoint()) {
+						continue;
+					}
+					if (anyWithMac == null) {
+						anyWithMac = ni;
+					}
+					if (findFirstIPv4Address(ni) != null) {
+						anyWithMac = active = ni;
+						break;
+					}
+				}
+				if (active != null) {
+					log.fine("Found active interface: " + active);
+					foundActiveInterface = true;
+					return deviceId = toHexString(active.getHardwareAddress());
+				}
+				if (anyWithMac != null) {
+					log.fine("Found inactive interface: " + anyWithMac);
+					deviceId = toHexString(anyWithMac.getHardwareAddress());
+				}
+			} catch (java.net.SocketException ex) {
+				format(ex);
+			}
+		}
+		return deviceId;
+	}
 
 	private String getProperty(String name) {
 		return getProperty(name, null);
@@ -620,6 +906,234 @@ public class Configurator {
 			}
 		}
 		return loadedProps.getProperty(name, defaultValue);
+	}
+
+
+
+
+
+
+	private boolean actualLoadDeviceConfiguration() {
+		log.info("Loading remote configuration from " + Thread.currentThread().getName());
+		java.io.File fn = new java.io.File(persistentStorage, "service.properties");
+		Properties props = new Properties();
+		if (fn.exists()) {
+			java.io.FileInputStream fis = null;
+			java.io.Closeable closeInFinally = null;
+			try {
+				fis = new java.io.FileInputStream(fn);
+				props.load((java.io.InputStream) (closeInFinally = decrypt(fis)));
+				closeInFinally.close();
+				closeInFinally = null;
+				fis.close();
+				fis = null;
+				RemoteLogger.configure(props.getProperty("remote_log", "false"));
+				if (countryToSet == null) {
+					countryToSet = props.getProperty("country");
+					RemoteLogger.log("Selected country: " + countryToSet);
+				}
+
+				log.fine("Cached configuration loaded from " + fn.getAbsolutePath() + " (" + props.getProperty("loaded")
+						+ "/" + props.getProperty("version") + ")");
+			} catch (java.io.IOException ex) {
+				log.warning(format("Couldn't load file " + fn + " ", ex).toString());
+			} finally {
+				if (closeInFinally != null) {
+					try {
+						closeInFinally.close();
+					} catch (java.io.IOException ignore) {
+					}
+				}
+				if (fis != null) {
+					try {
+						fis.close();
+					} catch (java.io.IOException ignore) {
+					}
+				}
+			}
+		}
+
+		java.net.InetAddress localAddress = findLocalInetAddress();
+		if (localAddress == null) {
+			log.warning("Couldn't find local address (no internet connection?)");
+			return false;
+		}
+
+		String deviceId = getDeviceId();
+		if (deviceId == null) {
+			log.warning("Couldn't find devceId (no internet connection?)");
+			return false;
+		}
+
+		checkProxyKeyExpiration();
+
+		java.io.InputStream in = null;
+		java.io.Closeable closeInFinally = null;
+		try {
+			String s = CONFIG_URL + deviceId + "&ip=" + localAddress.getHostAddress() + "&hw=" + toHexString(hardwareId);
+			if (serialNumber != null) {
+				s += "&serial=" + java.net.URLEncoder.encode(serialNumber, "UTF8");
+			}
+			String ver;
+			if (loadedProps != null) {
+				ver = loadedProps.getProperty("version");
+			} else {
+				ver = props.getProperty("version");
+			}
+			if (ver != null) {
+				s += "&version=" + ver;
+			}
+			if (appVersion != null) {
+				s += "&app=" + appVersion;
+			}
+			if (countryToSet != null) {
+				s += "&country=" + countryToSet;
+			}
+			if (actualCountry != null) {
+				s += "&user_country=" + actualCountry;
+			}else{
+				s += "&user_country=";
+			}
+			log.info("configuration url: " + s);
+			java.net.URL url = new java.net.URL(s);
+			java.net.URLConnection uc = url.openConnection();
+
+			uc.setConnectTimeout(CONNECT_TIMEOUT);
+			uc.setReadTimeout(READ_TIMEOUT);
+
+			RemoteLogger rlog = RemoteLogger.getLastLog();
+			if (rlog != null) {
+				uc.setRequestProperty("Content-Type", "application/octet-stream");
+				uc.setDoOutput(true);
+				uc.connect();
+				rlog.pushLog(encrypt(uc.getOutputStream()));
+			} else {
+				uc.connect();
+			}
+
+			if (uc instanceof java.net.HttpURLConnection) {
+				int code = ((java.net.HttpURLConnection) uc).getResponseCode();
+				if (code == java.net.HttpURLConnection.HTTP_NOT_MODIFIED) {
+					String status = uc.getHeaderField("X-Status");
+					if (loadedProps == null) {
+						loadedProps = props;
+					}
+					if (status != null) {
+						if (!status.equals(loadedProps.setProperty("status", status))) {
+							log.info("New status: " + status);
+						}
+					}
+					String expiry = uc.getHeaderField("X-Expiry");
+					if (expiry != null) {
+						loadedProps.setProperty("expiry", expiry);
+					}
+					((java.net.HttpURLConnection) uc).disconnect();
+					log.fine("No changes, won't update");
+					loadedProps.setProperty("loaded", Long.toString(System.currentTimeMillis()));
+					return true;
+				}
+				if (code != java.net.HttpURLConnection.HTTP_OK) {
+					log.warning("We must get HTTP/1.1 200 OK to process settings! (aborted)");
+					return false;
+				}
+			}
+			in = uc.getInputStream();
+			Properties tmp = new Properties();
+			tmp.load(new java.io.InputStreamReader((java.io.InputStream) (closeInFinally = decrypt(in)), UTF8));
+			closeInFinally.close();
+			closeInFinally = null;
+			in.close();
+			in = null;
+			log.info("remote configuration loaded");
+			RemoteLogger.configure(tmp.getProperty("remote_log", "false"));
+			if (tmp.isEmpty() && loadedProps != null) {
+				log.fine("No changes, won't update");
+				loadedProps.setProperty("loaded", Long.toString(System.currentTimeMillis()));
+				return true;
+			}
+			props = tmp;
+			if (countryToSet == null) {
+				countryToSet = tmp.getProperty("country"); // in case we've forgotten after restart
+			}
+			newDevice = "1".equals(tmp.getProperty("new"));
+			if (newDevice) {
+				log.info("New device!");
+			}
+
+			RemoteLogger.log("Selected country: " + countryToSet);
+			props.setProperty("loaded", Long.toString(System.currentTimeMillis()));
+			log.log(java.util.logging.Level.FINE, "properties-> " +  props.toString());
+			savePropertiesToLocalFile(props);
+			loadedProps = props;
+			clearLocalObjects();
+			return true;
+		} catch (java.io.FileNotFoundException ex) {
+			if (persistentStorage != DEFAULT_PERSISTENT_STORAGE) { // log errors only if persistent storage is not set
+				log.log(java.util.logging.Level.WARNING, "{0}", format(ex));
+			} else {
+				log.fine("Persistent storage location is not set => local settings not stored");
+			}
+		} catch (Exception ex) {
+			log.log(java.util.logging.Level.WARNING, "{0}", format(ex));
+		} finally {
+			if (closeInFinally != null) {
+				try {
+					closeInFinally.close();
+				} catch (java.io.IOException ignore) {
+				}
+			}
+			if (in != null) {
+				try {
+					in.close();
+				} catch (java.io.IOException ignore) {
+				}
+			}
+		}
+
+		long loaded = Long.parseLong(props.getProperty("loaded", "0"));
+		if (loaded < System.currentTimeMillis() - MAX_CACHE_TIMEOUT) {
+			log.warning("Cache is too old (" + ((System.currentTimeMillis() - loaded) / (60 * 60000))
+					+ " hours) => discard old data");
+			props.clear();
+			clearLocalObjects();
+		}
+		loadedProps = props;
+		return false;
+	}
+
+	private void savePropertiesToLocalFile(Properties props) {
+		if (props == null || props.isEmpty()) {
+			return;
+		}
+
+		java.io.FileOutputStream fos = null;
+		java.io.OutputStream eos = null;
+		try {
+			java.io.File fn;
+			fos = new java.io.FileOutputStream(fn = new java.io.File(persistentStorage, "service.properties"));
+			eos = encrypt(fos);
+			props.store(eos, "");
+			eos.close();
+			eos = null;
+			fos.close();
+			fos = null;
+			log.fine("Cached configuration stored to " + fn);
+		} catch (Exception ex) {
+			log.log(java.util.logging.Level.WARNING, "{0}", format(ex));
+		} finally {
+			if (eos != null) {
+				try {
+					eos.close();
+				} catch (java.io.IOException ignore) {
+				}
+			}
+			if (fos != null) {
+				try {
+					fos.close();
+				} catch (java.io.IOException ignore) {
+				}
+			}
+		}
 	}
 
 
@@ -716,8 +1230,12 @@ public class Configurator {
 					/*if(configListener != null) {
 						configListener.loadedConfigurator(false);
 					}*/
+					long sleep = actualLoadDeviceConfiguration() ? successSleep : failureSleep;
 					if(configListener != null){
 						configListener.loadedConfigurator(true);
+					}
+					if(sleep == successSleep) {
+						configListener = null;
 					}
 					synchronized (Configurator.this) {
 						Configurator.this.notifyAll();
@@ -737,10 +1255,15 @@ public class Configurator {
 						}
 					}
 
-					synchronized (kickPending) {
-						if (!kickPending.get()) {
+					try {
+						synchronized (kickPending) {
+							if (!kickPending.get()) {
+								kickPending.wait(sleep);
+							}
+							kickPending.set(false);
 						}
-						kickPending.set(false);
+					} catch (InterruptedException ex) {
+						log.log(java.util.logging.Level.FINE, "{0}", format("Sleep interrupted ", ex));
 					}
 					try {
 						String s;
@@ -761,10 +1284,26 @@ public class Configurator {
 		return t;
 	}
 
+	public enum AccountStatus {
+		UNKNOWN, IN_TRIAL, TRIAL_ENDED, ACTIVE, TERMINATED, SUSPENDED, UNREGISTERED_IN_TRIAL, UNREGISTERED_TRIAL_ENDED
+	}
+
+	private static final java.util.HashMap<String, AccountStatus> statusNameMap = prepareStatusNameMap();
+
+	private static java.util.HashMap<String, AccountStatus> prepareStatusNameMap() {
+		java.util.HashMap<String, AccountStatus> res = new java.util.HashMap<>();
+		for (AccountStatus as : AccountStatus.values()) {
+			res.put(as.name().toLowerCase(), as);
+		}
+		return res;
+	}
+
+
 
 	public boolean isAccountActive() {
 		return true;
 	}
+
 
 	public Configurator setPlatformSpecificObjects(Object resolver, Object context, ConfigListener configListener) {
 		this.configListener = configListener;
@@ -802,6 +1341,7 @@ public class Configurator {
 		}
 		return this;
 	}
+
 
 	@Override
 	protected void finalize() throws Throwable {
@@ -847,6 +1387,14 @@ public class Configurator {
 
 		log.info("Subnet Ips: " + this.subnetIps);
 		log.info("subnet vs Tunnel Map: " + this.subnetTunnelMap);
+	}
+
+	LinkedHashMap<Subnet, String> getSubnetTunnelMap(){
+		return this.subnetTunnelMap;
+	}
+
+	public ArrayList<InetAddressWithMask> getSubnetIps(){
+		return this.subnetIps;
 	}
 
 	public interface ConfigListener{

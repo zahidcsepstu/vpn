@@ -8,13 +8,18 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.os.IBinder;
-import android.util.Log;
 
+
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+
+import com.amplitude.api.Amplitude;
 import com.sb.vpnapplication.services.PHVpnService;
 
 import java.util.Observable;
 import java.util.Observer;
 import java.util.logging.Logger;
+
+//mport com.streamlocator.vpn.Preferences;
 
 /**
  * A class that separates and hides all the complexity of controlling VpnService from UI
@@ -34,6 +39,8 @@ public class VpnServiceUiController {
     private static Logger log = Logger.getLogger(VpnServiceUiController.class.getName());
 
     private PHVpnService _serviceInstance;
+    private LocalBroadcastManager _broadcastManager;
+   // private Preferences _preferences;
     private Activity _activity;
     private Context _context;
 
@@ -60,19 +67,47 @@ public class VpnServiceUiController {
 
             PHVpnService.LocalBinder binder = (PHVpnService.LocalBinder)service;
             _serviceInstance = binder.getService();
+
+            _broadcastManager.registerReceiver((_broadcastReceiver),
+                    new IntentFilter(PHVpnService.PHSERVICE_MESSAGE)
+            );
         }
 
         @Override
         public void onServiceDisconnected(ComponentName arg0) {
+            _broadcastManager.unregisterReceiver(_broadcastReceiver);
             _serviceInstance = null;
         }
     };
 
 
 
-    public VpnServiceUiController(Activity activity) {
+    public VpnServiceUiController( Activity activity) {
         this._activity = activity;
         this._context = _activity;
+
+        //_preferences = Preferences.getPreferences( _context );
+        _broadcastManager = LocalBroadcastManager.getInstance(_context);
+
+        // self observe to send mixpanel events
+        //
+        _observable.addObserver(
+                new Observer() {
+                    @Override
+                    public void update(Observable observable, Object data) {
+                        switch (_serviceInstance.getStatus()) {
+                            case STARTED:
+                                Amplitude.getInstance().logEvent("fire-vpn-start-success");
+                                break;
+                            case STOPPED:
+                                Amplitude.getInstance().logEvent("fire-vpn-stop-success");
+                                break;
+                            case FAILED:
+                                Amplitude.getInstance().logEvent("fire-vpn-start-failure");
+                                break;
+                        }
+                    }
+                });
     }
 
     /**
@@ -88,6 +123,7 @@ public class VpnServiceUiController {
      */
     public void onDestroy() {
         _context.unbindService(_serviceConnection);
+        _broadcastManager.unregisterReceiver(_broadcastReceiver);
         _serviceInstance = null;
     }
 
@@ -97,7 +133,11 @@ public class VpnServiceUiController {
      */
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (resultCode == Activity.RESULT_OK) {
+            Amplitude.getInstance().logEvent("fire-allow-vpn-granted");
             startTheService();
+        }
+        else {
+            Amplitude.getInstance().logEvent("fire-allow-vpn-denied");
         }
     }
 
@@ -108,6 +148,9 @@ public class VpnServiceUiController {
         // protect against double start
         if ( getStatus() == PHVpnService.ServiceStatus.STARTED )
             return;
+
+        //_preferences.setLastRunningState (true);
+        Amplitude.getInstance().logEvent("fire-vpn-start-clicked");
         initiateServiceStart();
     }
 
@@ -116,6 +159,10 @@ public class VpnServiceUiController {
      */
     public void stop() {
         // protect against double stop
+        if ( getStatus() == PHVpnService.ServiceStatus.STOPPED )
+            return;
+       // _preferences.setLastRunningState (false);
+        Amplitude.getInstance().logEvent("fire-vpn-stop-clicked");
         _serviceInstance.stop();
     }
 
@@ -150,6 +197,7 @@ public class VpnServiceUiController {
         log.info("SLVA: Invoking start service");
         Intent intent = PHVpnService.prepare(_context);
         if (intent != null) {
+            Amplitude.getInstance().logEvent("fire-allow-vpn-requested");
             _activity.startActivityForResult(intent, 0);
         } else {
             startTheService();

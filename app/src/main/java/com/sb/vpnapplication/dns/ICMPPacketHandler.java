@@ -1,5 +1,4 @@
 package com.sb.vpnapplication.dns;
-
 import static com.sb.vpnapplication.logger.LoggerFormatter.format;
 
 public class ICMPPacketHandler extends PacketHandler {

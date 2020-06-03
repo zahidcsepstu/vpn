@@ -40,7 +40,7 @@ public class RemoteLogger {
 		return message;
 	}
 
-	void pushLog(java.io.OutputStream out) {
+	public void pushLog(java.io.OutputStream out) {
 		if (messages.isEmpty()) {
 			return;
 		}

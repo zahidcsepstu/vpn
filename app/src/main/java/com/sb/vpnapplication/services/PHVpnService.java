@@ -16,18 +16,21 @@ import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
-
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import com.sb.vpnapplication.MainActivity;
+import com.sb.vpnapplication.R;
+import com.sb.vpnapplication.dns.Configurator;
 import com.sb.vpnapplication.dns.InetAddressWithMask;
-import com.sb.vpnapplication.logger.LoggerHelper;
 import com.sb.vpnapplication.dns.SocketProtector;
 import com.sb.vpnapplication.dns.TunDNSResolver;
 import com.sb.vpnapplication.dns.TunnelHandler;
+import com.sb.vpnapplication.logger.LoggerHelper;
+
 
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.net.UnknownHostException;
+import java.net.InetAddress;
 import java.util.logging.Logger;
 
 
@@ -40,6 +43,9 @@ public class PHVpnService extends VpnService implements SocketProtector {
     public static final int SERVICE_STOPPED = 1;
     public static final int SERVICE_STARTED = 2;
 
+    private LocalBroadcastManager _broadcaster;
+
+    private Configurator _config;
 
     private Thread mThread;
     private ParcelFileDescriptor mInterface;
@@ -64,14 +70,29 @@ public class PHVpnService extends VpnService implements SocketProtector {
 
     @Override
     public void onCreate() {
+        log.info("SLVA: onCreate()");
+        _broadcaster = LocalBroadcastManager.getInstance(this);
         setServiceStatus(ServiceStatus.STOPPED);
     }
 
+    private void checkInstalledApps(Configurator cfg) {
+        try {
+            android.content.pm.PackageManager pm = getPackageManager();
+            java.util.List<android.content.pm.ApplicationInfo> apps = pm.getInstalledApplications(
+                    android.content.pm.PackageManager.GET_META_DATA);
+            java.util.ArrayList<String> res = new java.util.ArrayList<>();
+            for (android.content.pm.ApplicationInfo app : apps) {
+                res.add(app.packageName);
+            }
+            cfg.setInstalledApps(res.toArray(new String[res.size()]));
+        } catch (Throwable ignore) {
+            log.warning("Check failed: " + ignore);
+        }
+    }
 
     // Services interface
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        Log.d("zahid","onstart");
         log.info("SLVA: Entered onStartCommand.");
 
         IntentFilter intentFilter = new IntentFilter();
@@ -84,7 +105,8 @@ public class PHVpnService extends VpnService implements SocketProtector {
             PendingIntent pendingIntent = PendingIntent.getActivity(this,
                     0, notificationIntent, 0);
             Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-                    .setContentTitle("StreamLocator is running.")
+                    .setContentTitle("Vpn Application is running.")
+                    .setSmallIcon(R.mipmap.ic_launcher)
                     .setContentIntent(pendingIntent)
                     .build();
             startForeground(1, notification);
@@ -95,6 +117,8 @@ public class PHVpnService extends VpnService implements SocketProtector {
             return START_STICKY;
         }
 
+        _config = Configurator.getInstance().setPlatformSpecificObjects(
+                getContentResolver(), getApplicationContext(), null);
 
         startTunnel();
 
@@ -104,7 +128,6 @@ public class PHVpnService extends VpnService implements SocketProtector {
 
     @Override
     public void onDestroy() {
-        Log.d("zahid","onDestroy");
         log.info("SLVA: onDestroy StreamLocator VPN Service");
         stopTunnel();
         stopVPN();
@@ -116,7 +139,6 @@ public class PHVpnService extends VpnService implements SocketProtector {
     }
 
     public void stop() {
-        Log.d("zahid","onstop");
         stopTunnel();
         stopVPN();
         stopSelf();
@@ -126,20 +148,17 @@ public class PHVpnService extends VpnService implements SocketProtector {
     }
 
     public void reload(){
-        Log.d("zahid","onreload");
         reloadService = true;
         stopTunnel();
     }
 
     private void stopTunnel(){
-        Log.d("zahid","stopTunnel");
         if(tunnelHandler != null){
             tunnelHandler.finish();
         }
     }
 
     private void stopVPN() {
-        Log.d("zahid","stopvpn");
         if (tunResolver != null) {
             tunResolver.stop();
             tunResolver = null;
@@ -147,7 +166,6 @@ public class PHVpnService extends VpnService implements SocketProtector {
     }
 
     private void startTunnel(){
-        Log.d("zahid","startTunnel");
         Thread tunnelThread = new Thread(new Runnable() {
             @Override
             public void run() {
@@ -162,25 +180,70 @@ public class PHVpnService extends VpnService implements SocketProtector {
     }
 
     private void startVPN(final InetAddressWithMask addr){
-        Log.d("zahid","startvpn");
         // Start a new session by creating a new thread.
         mThread = new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
+                    PHVpnService.this.checkInstalledApps(_config); // results may be useful for getApps if we don't know exact name
+
+                    if (addr == null) {
+                        log.warning("Can't start without Internet connection");
+                        PHVpnService.this.setServiceStatus(ServiceStatus.FAILED);
+                        return;
+                    }
+
                     _builder = new Builder();
 
                     log.info("SLVA: Starting StreamLocator VPN Service...");
-                    log.info("vpnAddress:" +addr.getHostAddress());
+                    log.info("vpnAddress: " + addr.getHostAddress());
+                    Log.d("addresscheck", "phvpn addAddress" + addr.getHostAddress());
                     _builder.setSession("PHVPNService");
                     _builder.addAddress(addr.getAddress(), addr.getBits());
 
-                    int mtu = 1400;
-                    _builder.setMtu(mtu);
-                    _builder.addDnsServer("8.8.8.8");
-                    _builder.addDnsServer("8.8.4.4");
+                    int mtu = _config.getMTU();
+                    if (mtu > 0) {
+                        Log.d("zahid", "builder mtu" + mtu);
+                        _builder.setMtu(mtu);
+                    }
+
+                    android.app.ActivityManager am = (android.app.ActivityManager)
+                            PHVpnService.this.getSystemService(Context.ACTIVITY_SERVICE);
+                    for (String s : _config.getApps()) {
+                        _builder.addAllowedApplication(s);
+                        am.killBackgroundProcesses(s);
+                        log.info("App added: " + s);
+                    }
+
+                    for (InetAddress ia : _config.getDNSServers()) {
+                        _builder.addDnsServer(ia);
+                        Log.d("addresscheck", "phvpn dnsadd " + ia.getHostAddress());
+                    }
+
+                    //for testing purpose
+                    _builder.addRoute("0.0.0.0", 0);
                     _builder.addAllowedApplication("com.android.chrome");
-                    _builder.addRoute("0.0.0.0",0);
+
+                    for (InetAddressWithMask iam : _config.getRedirectRanges()) {
+                        try {
+                            _builder.addRoute(iam.getAddress(), iam.getBits());
+                            Log.d("addresscheck", "phvpn addroute " + iam);
+                        } catch (Exception ex) {
+                            log.severe("Couldn't add route: " + iam + " >> " + ex);
+                        }
+                    }
+
+                    // added by stitel
+                    for (InetAddressWithMask subnetIp : _config.getSubnetIps()) {
+                        try {
+                            _builder.addRoute(subnetIp.getAddress(), subnetIp.getBits());
+                            log.info("Route added: " + subnetIp);
+                        } catch (Exception ex) {
+                            log.severe("Couldn't add route: " + subnetIp + " >> " + ex);
+                        }
+                    }
+
+
                     mInterface = _builder.establish();
 
                     if (null == mInterface) {
@@ -188,6 +251,8 @@ public class PHVpnService extends VpnService implements SocketProtector {
                         PHVpnService.this.setServiceStatus(ServiceStatus.FAILED);
                         return;
                     }
+
+                    // in means server in
                     FileInputStream in = new FileInputStream(
                             mInterface.getFileDescriptor());
                     //b. Packets received need to be written to this output stream.
@@ -198,7 +263,6 @@ public class PHVpnService extends VpnService implements SocketProtector {
                     tunnelHandler.setVpnOut(out.getChannel());
 
                     log.info("SLVA: Tunnel state: " + TunnelHandler.getState());
-
 
                     tunResolver = new TunDNSResolver(PHVpnService.this, in, out, tunnelHandler);
 
@@ -254,6 +318,7 @@ public class PHVpnService extends VpnService implements SocketProtector {
 
         Intent intent = new Intent(PHSERVICE_MESSAGE);
         intent.putExtra(PHSERVICE_MESSAGE, SERVICE_STARTED);
+        _broadcaster.sendBroadcast(intent);
     }
 
     public ServiceStatus getStatus() {
@@ -264,34 +329,30 @@ public class PHVpnService extends VpnService implements SocketProtector {
 
         @Override
         public void onInit() {
-            Log.d("zahid","tunnel on init");
             log.info("SLVA: Start default VPN connection");
             startVPN(InetAddressWithMask.parse("1.1.1.0/31"));
         }
 
         @Override
         public void onConnect(final String vpnAddress) {
-            Log.d("zahid","tunnel on connect");
             log.info("SLVA: Start streaming VPN connection");
             if (mThread != null) {
                 log.info("Stopping StreamLocator VPN Service...");
                 mThread.interrupt();
                 mThread = null;
             }
-           // Log.d("vpn address",vpnAddress);
+            Log.d("addresscheck","phvpn Connect "+vpnAddress);
             startVPN(InetAddressWithMask.parse(vpnAddress));
 
         }
 
         @Override
         public void onRestart() {
-            Log.d("zahid","tunnel on restart");
             tunnelHandler.endConnection();
         }
 
         @Override
         public void onFail(String message) {
-            Log.d("zahid","tunnel on failed "+message);
             log.warning(message);
             // TUN  connection state should not influence the overall service status. The TUN connection might fail while the DNS resolver works for other services
             //setServiceStatus(ServiceStatus.FAILED);
@@ -299,7 +360,6 @@ public class PHVpnService extends VpnService implements SocketProtector {
 
         @Override
         public void onClose() {
-            Log.d("zahid","tunnel on close");
             log.info("SLVA: Tunnel connection closed");
             if (mThread != null) {
                 log.info("Stopping PrivacyHero VPN Service...");
@@ -342,6 +402,5 @@ public class PHVpnService extends VpnService implements SocketProtector {
             }
         }
     }
-
 
 }

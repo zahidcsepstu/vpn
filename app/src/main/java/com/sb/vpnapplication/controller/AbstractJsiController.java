@@ -1,5 +1,6 @@
 package com.sb.vpnapplication.controller;
 
+
 import com.sb.vpnapplication.MainActivity;
 
 public abstract class AbstractJsiController {

@@ -1,8 +1,5 @@
 package com.sb.vpnapplication.controller;
 
-
-import android.util.Log;
-
 import com.sb.vpnapplication.MainActivity;
 
 import java.util.Observable;
@@ -18,7 +15,7 @@ public class VpnController extends AbstractJsiController{
         _vpnServiceUiController.registerStatusObserver(new Observer() {
             @Override
             public void update(Observable observable, Object data) {
-
+                _mainActivity.refresh();
             }
         });
     }
@@ -27,7 +24,6 @@ public class VpnController extends AbstractJsiController{
     }
 
     public void stop() {
-        Log.d("zahid","vpnControllerStop");
         _vpnServiceUiController.stop();
     }
     public void reload(){
